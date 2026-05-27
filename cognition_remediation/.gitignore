@@ -1,0 +1,20 @@
+# Local SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Env
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Logs
+logs/
+*.log
