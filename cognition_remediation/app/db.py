@@ -20,15 +20,16 @@ logger = get_logger(__name__)
 
 
 _SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS events (
-    id              INTEGER PRIMARY KEY,
-    timestamp       TEXT NOT NULL,
-    event_type      TEXT NOT NULL,
-    issue_id        INTEGER,
-    session_id      TEXT,
-    pr_number       INTEGER,
-    payload         TEXT,
-    idempotency_key TEXT UNIQUE
+CREATE TABLE IF NOT EXISTS issues (
+    issue_id      INTEGER PRIMARY KEY,
+    title         TEXT NOT NULL,
+    complexity    TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    severity      TEXT,
+    state         TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    closed_at     TEXT,
+    reopened_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -43,19 +44,21 @@ CREATE TABLE IF NOT EXISTS sessions (
     commits_count      INTEGER,
     ci_first_pass      INTEGER,
     human_intervened   INTEGER,
-    duration_seconds   INTEGER
+    duration_seconds   INTEGER,
+    FOREIGN KEY (issue_id) REFERENCES issues(issue_id)
 );
 
-CREATE TABLE IF NOT EXISTS issues (
-    issue_id      INTEGER PRIMARY KEY,
-    title         TEXT NOT NULL,
-    complexity    TEXT NOT NULL,
-    source        TEXT NOT NULL,
-    severity      TEXT,
-    state         TEXT NOT NULL,
-    created_at    TEXT NOT NULL,
-    closed_at     TEXT,
-    reopened_at   TEXT
+CREATE TABLE IF NOT EXISTS events (
+    id              INTEGER PRIMARY KEY,
+    timestamp       TEXT NOT NULL,
+    event_type      TEXT NOT NULL,
+    issue_id        INTEGER,
+    session_id      TEXT,
+    pr_number       INTEGER,
+    payload         TEXT,
+    idempotency_key TEXT UNIQUE,
+    FOREIGN KEY (issue_id) REFERENCES issues(issue_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
 """
 
@@ -87,6 +90,20 @@ def get_db(db_path: str) -> sqlite3.Connection:
     """Open a SQLite connection at ``db_path`` and ensure the schema exists.
 
     Caller manages lifecycle (close). Pass ``":memory:"`` for tests.
+
+    **Threading contract:** ``check_same_thread=False`` is set so the connection
+    can be passed between threads (e.g. the FastAPI request handler and the
+    background poller). This does NOT make the connection thread-safe —
+    ``sqlite3.Connection`` does not serialize concurrent ``execute``/``commit``
+    calls. The caller is responsible for one of:
+
+      1. Restricting writes to a single thread (the design's "single writer"
+         convention), OR
+      2. Wrapping mutations in a ``threading.Lock``, OR
+      3. Opening a separate connection per thread.
+
+    WAL journaling permits concurrent readers + one writer at the file level,
+    so option (3) gives the best throughput when multiple threads need writes.
     """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row

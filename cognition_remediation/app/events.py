@@ -57,9 +57,11 @@ def insert_event(
     """Insert a single event row.
 
     Silently ignores duplicates (same ``idempotency_key``). ``payload`` is
-    JSON-serialized; pass ``None`` to store NULL.
+    JSON-serialized with ``default=str`` so non-JSON-native values (datetime,
+    Decimal, Path, UUID) are best-effort stringified instead of raising
+    TypeError. Pass ``None`` to store NULL.
     """
-    payload_json = json.dumps(payload) if payload is not None else None
+    payload_json = json.dumps(payload, default=str) if payload is not None else None
     with db:
         db.execute(
             """
