@@ -226,7 +226,7 @@ def main(config_path: Path = DEFAULT_CONFIG_PATH) -> int:
         )
         created += 1
 
-    logger.info("seed.done", extra={"created": created, "skipped": skipped})
+    logger.info("seed.done", extra={"issues_created": created, "issues_skipped": skipped})
     return 0
 
 
