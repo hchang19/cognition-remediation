@@ -20,6 +20,7 @@ Build in order. Each stage spec is self-contained — a coding agent can impleme
 | 3 | [docs/stage-3-clients.md](./docs/stage-3-clients.md) | 0 |
 | 4 | [docs/stage-4-orchestrator.md](./docs/stage-4-orchestrator.md) | 2, 3 |
 | 5 | [docs/stage-5-dashboard.md](./docs/stage-5-dashboard.md) | 2 |
+| 6 | [docs/stage-6-docker.md](./docs/stage-6-docker.md) | 4, 5 |
 
 ## Folder Structure
 

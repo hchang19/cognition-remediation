@@ -77,4 +77,4 @@ python3 -m scripts.demo
 | Issue | Cause | Fix |
 |---|---|---|
 | Labels show as `(none)` on GitHub | Fine-grained PAT missing label-assignment scope | Regenerate token with **Issues: Read and write** at `github.com/settings/tokens` |
-| `ConfigError: GITHUB_TOKEN not set` | `.env` not sourced | Run `set -a && source .env && set +a` before the script |
+| `ConfigError: GITHUB_TOKEN not set` | `.env` missing or incomplete | Ensure `.env` exists in `cognition_remediation/` with all required keys |
