@@ -2,6 +2,25 @@
 
 End-to-end walkthrough of the seeder and GitHub verification steps.
 
+## Quick Start
+
+1. **Prerequisites:** Python 3.10+, credentials in `.env` (see `.env.example`)
+2. **Install:** `pip install -r requirements.txt`
+3. **Run demo script:**
+   ```bash
+   cd cognition_remediation && python3 -m scripts.demo
+   ```
+4. **Run tests:**
+   ```bash
+   pytest -m unit -v
+   ```
+5. **Docker** (coming in Stage 6):
+   ```bash
+   docker compose up --build
+   ```
+
+---
+
 ## Prerequisites
 
 `.env` configured with valid credentials (see `.env.example`):
@@ -16,7 +35,6 @@ DEVIN_API_KEY=<your key>
 
 ```bash
 cd cognition_remediation
-set -a && source .env && set +a
 python3 -m scripts.demo
 ```
 
