@@ -11,12 +11,17 @@ Run:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from app.shared.config import load_config
 from app.shared.github_session import github_session
@@ -32,6 +37,9 @@ from scripts.seed_issues import (
     _already_seeded,
     create_issue,
 )
+
+# Suppress INFO logs from seed_issues after its logger is created
+logging.getLogger("scripts.seed_issues").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
 

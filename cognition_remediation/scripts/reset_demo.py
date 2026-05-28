@@ -21,6 +21,9 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 import requests  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
 
 from app.shared.config import load_config  # noqa: E402
 from app.shared.github_session import github_session  # noqa: E402
