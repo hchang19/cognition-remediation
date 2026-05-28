@@ -29,6 +29,9 @@ if str(_PKG_ROOT) not in sys.path:
 
 import requests  # noqa: E402
 import yaml  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
 
 from app.shared.config import load_config  # noqa: E402
 from app.shared.github_session import github_session  # noqa: E402
@@ -226,7 +229,7 @@ def main(config_path: Path = DEFAULT_CONFIG_PATH) -> int:
         )
         created += 1
 
-    logger.info("seed.done", extra={"created": created, "skipped": skipped})
+    logger.info("seed.done", extra={"issues_created": created, "issues_skipped": skipped})
     return 0
 
 
