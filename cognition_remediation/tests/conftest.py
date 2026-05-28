@@ -5,6 +5,11 @@ from unittest.mock import MagicMock
 from app.db import get_db
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "unit: offline, fully mocked — no network or filesystem side-effects")
+    config.addinivalue_line("markers", "integration: requires network and .env credentials")
+
+
 @pytest.fixture
 def mem_db():
     conn = get_db(":memory:")
