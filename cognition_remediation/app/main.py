@@ -7,6 +7,7 @@ on startup.
 
 from __future__ import annotations
 
+import os
 import threading
 from contextlib import asynccontextmanager
 
@@ -70,7 +71,6 @@ def create_app(
 
 # Production entrypoint — only runs when GITHUB_TOKEN env var is set so
 # test imports of create_app don't fail due to missing env vars.
-import os
 if os.environ.get("GITHUB_TOKEN"):
     from dotenv import load_dotenv
     load_dotenv()
