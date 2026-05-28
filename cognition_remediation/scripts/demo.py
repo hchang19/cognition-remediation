@@ -63,13 +63,32 @@ def fetch_open_issues(session, repo: str) -> list[dict]:
     return issues
 
 
-def print_issues_table(issues: list[dict]) -> None:
-    print(f"\n{'#':<6} {'Title':<60} {'Labels'}")
-    print("-" * 100)
+def _build_meta_lookup(issues_cfg: list[dict]) -> dict[str, dict]:
+    """Map idempotency_key → {type, complexity, source, severity} from local YAML."""
+    lookup = {}
+    for issue in issues_cfg:
+        key = _extract_idempotency_key(issue.get("body", "") or "")
+        if key:
+            lookup[key] = {
+                "type": issue.get("type", ""),
+                "complexity": issue.get("complexity", ""),
+                "source": issue.get("source", ""),
+                "severity": issue.get("severity", ""),
+            }
+    return lookup
+
+
+def print_issues_table(issues: list[dict], meta: dict[str, dict]) -> None:
+    print(f"\n{'#':<6} {'Title':<55} {'Type':<14} {'Complexity':<16} {'Severity'}")
+    print("-" * 110)
     for issue in sorted(issues, key=lambda i: i["number"]):
-        labels = ", ".join(l["name"] for l in issue.get("labels", []))
-        title = issue["title"][:57] + "..." if len(issue["title"]) > 60 else issue["title"]
-        print(f"#{issue['number']:<5} {title:<60} {labels or '(none)'}")
+        key = _extract_idempotency_key(issue.get("body", "") or "")
+        m = meta.get(key, {})
+        title = issue["title"][:52] + "..." if len(issue["title"]) > 55 else issue["title"]
+        print(
+            f"#{issue['number']:<5} {title:<55} "
+            f"{m.get('type', '?'):<14} {m.get('complexity', '?'):<16} {m.get('severity') or '—'}"
+        )
     print()
 
 
@@ -104,7 +123,8 @@ def main() -> int:
     print("\n=== Step 2: Fetching open issues from GitHub ===")
     open_issues = fetch_open_issues(session, cfg.github_repo)
     print(f"  Found {len(open_issues)} open issue(s) in {cfg.github_repo}")
-    print_issues_table(open_issues)
+    meta = _build_meta_lookup(issues_cfg)
+    print_issues_table(open_issues, meta)
 
     return 0
 
