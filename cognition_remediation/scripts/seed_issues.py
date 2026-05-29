@@ -43,6 +43,15 @@ logger = get_logger(__name__)
 DEFAULT_CONFIG_PATH = _PKG_ROOT / "config" / "issues.yml"
 GITHUB_API = "https://api.github.com"
 
+# Labels applied by the poller/orchestrator at runtime — not on seed issues, so
+# they won't be auto-created by _collect_labels(). Ensure they exist up front.
+_SYSTEM_LABELS = [
+    "needs-human-scoping",  # complexity:ambiguous decline
+    "devin-incomplete",     # cost cap or time limit hit
+    "devin-failed",         # Devin reported failure
+    "devin-blocked",        # Devin waiting on human input
+]
+
 
 # ---------------------------------------------------------------------------
 # HTTP wrappers (retry on 5xx / connection errors via with_retry)
@@ -103,14 +112,15 @@ def ensure_labels(session: requests.Session, repo: str, labels: Iterable[str]) -
 
 
 def fetch_existing_issue_bodies(session: requests.Session, repo: str) -> list[str]:
-    """Return the body text of every open and closed issue in the repo.
+    """Return the body text of every open issue in the repo.
 
-    Uses /issues?state=all with pagination. Filters out pull requests (GitHub's
+    Checks open issues only so that closed issues (e.g. after a demo reset)
+    can be re-created on the next seed run. Filters out pull requests (GitHub's
     issues endpoint returns PRs too — they carry a `pull_request` key).
     """
     bodies: list[str] = []
     url = f"{GITHUB_API}/repos/{repo}/issues"
-    params = {"state": "all", "per_page": 100, "page": 1}
+    params = {"state": "open", "per_page": 100, "page": 1}
     while True:
         response = _get(session, url, params=params)
         batch = response.json()
@@ -192,8 +202,8 @@ def main(config_path: Path = DEFAULT_CONFIG_PATH) -> int:
     issues = load_issues(config_path)
     logger.info("seed.start", extra={"repo": cfg.github_repo, "count": len(issues)})
 
-    # 1. ensure all labels exist
-    labels = _collect_labels(issues)
+    # 1. ensure all labels exist (issue labels + runtime system labels)
+    labels = _collect_labels(issues) + _SYSTEM_LABELS
     logger.info("labels.ensure", extra={"count": len(labels)})
     ensure_labels(session, cfg.github_repo, labels)
 
