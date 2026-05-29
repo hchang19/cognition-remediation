@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  orchestrator:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - db-data:/data
+    env_file: .env
+    environment:
+      DB_PATH: /data/cognition.db
+
+  dashboard:
+    build: .
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - db-data:/data
+    env_file: .env
+    environment:
+      DB_PATH: /data/cognition.db
+
+volumes:
+  db-data:
