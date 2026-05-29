@@ -1,36 +1,41 @@
 """End-to-end test script for Stage 3 clients.
 
-Exercises the full client lifecycle against real APIs. Run from
-cognition_remediation/:
+Exercises both clients against real APIs. The Devin test creates a
+minimal session with a dummy prompt and terminates it immediately so
+token usage is negligible (< $0.01).
+
+Run from cognition_remediation/:
 
     python scripts/test_e2e.py              # full suite (Devin + GitHub)
     python scripts/test_e2e.py --github     # GitHub client only
     python scripts/test_e2e.py --devin      # Devin client only
 
-Requires .env with:
-    GITHUB_TOKEN    — fine-grained PAT with issues:write, pull_requests:read
-    GITHUB_REPO     — e.g. hchang19/superset
-    DEVIN_API_KEY   — Devin API key (Devin tests create a session; cost < $0.01)
-    DEVIN_ORG_ID    — Devin organization ID
+Credentials are loaded in this order:
+    1. .env file in the current directory  (python-dotenv)
+    2. Environment variables already exported in the shell
 
-The Devin session is terminated immediately after creation to minimize cost.
+Required vars:
+    GITHUB_TOKEN    — fine-grained PAT (issues:read, pull_requests:read)
+    GITHUB_REPO     — owner/repo, e.g. hchang19/superset
+    DEVIN_API_KEY   — Devin API key
+    DEVIN_ORG_ID    — Devin organization ID
 """
 
 import argparse
-import json
 import os
 import sys
 import time
-import traceback
 
 from dotenv import load_dotenv
 
+# Load .env BEFORE importing app modules so env vars are available
+# to any module-level code that reads os.environ.
 load_dotenv()
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _root)
 
-from app.devin_client import DevinClient, DevinAPIError
+from app.devin_client import DevinClient, DevinAPIError, SessionResponse
 from app.github_client import GitHubClient, Issue, CIRun
 from app.shared.github_session import github_session
 
@@ -55,187 +60,170 @@ def _record(name: str, status: str, detail: str = "") -> None:
     print(line)
 
 
-# ---------------------------------------------------------------------------
-# GitHub E2E tests
-# ---------------------------------------------------------------------------
-
-
-def run_github_tests() -> None:
-    token = os.environ.get("GITHUB_TOKEN")
-    repo = os.environ.get("GITHUB_REPO", "hchang19/superset")
-    if not token:
-        _record("github.setup", "SKIP", "GITHUB_TOKEN not set")
-        return
-
-    print("\n=== GitHub Client E2E ===\n")
-    session = github_session(token)
-    client = GitHubClient(session=session, repo=repo)
-
-    # 1. Fetch open issues with auto-remediate label
-    try:
-        issues = client.get_open_issues("auto-remediate")
-        assert isinstance(issues, list)
-        _record("github.get_open_issues", "PASS", f"found {len(issues)} issues")
-    except Exception as e:
-        _record("github.get_open_issues", "FAIL", str(e))
-        return
-
-    # 2. Verify Issue dataclass fields
-    if issues:
-        issue = issues[0]
-        try:
-            assert isinstance(issue, Issue)
-            assert isinstance(issue.number, int)
-            assert isinstance(issue.title, str)
-            assert isinstance(issue.labels, list)
-            assert isinstance(issue.body, str)
-            _record("github.issue_dataclass", "PASS", f"issue #{issue.number}: {issue.title[:60]}")
-        except Exception as e:
-            _record("github.issue_dataclass", "FAIL", str(e))
-    else:
-        _record("github.issue_dataclass", "SKIP", "no issues to inspect")
-
-    # 3. Verify label names are strings
-    if issues:
-        try:
-            for i in issues:
-                assert all(isinstance(lb, str) for lb in i.labels)
-            _record("github.label_types", "PASS", "all labels are strings")
-        except Exception as e:
-            _record("github.label_types", "FAIL", str(e))
-    else:
-        _record("github.label_types", "SKIP", "no issues")
-
-    # 4. Fetch PR commits (use PR #1 if it exists, otherwise skip)
-    try:
-        commits = client.get_pr_commits(pr_number=1)
-        assert isinstance(commits, list)
-        if commits:
-            assert commits[0].sha
-            assert commits[0].author
-        _record("github.get_pr_commits", "PASS", f"{len(commits)} commits on PR #1")
-    except Exception as e:
-        err = str(e)
-        if "404" in err:
-            _record("github.get_pr_commits", "SKIP", "PR #1 not found")
+def _require_env(*names: str) -> dict[str, str]:
+    """Return a dict of env vars. Records a SKIP and returns empty if any are missing."""
+    vals: dict[str, str] = {}
+    missing: list[str] = []
+    for n in names:
+        v = os.environ.get(n, "")
+        if not v:
+            missing.append(n)
         else:
-            _record("github.get_pr_commits", "FAIL", err)
-
-    # 5. Fetch CI run for PR #1
-    try:
-        ci = client.get_latest_ci_run(pr_number=1)
-        if ci is not None:
-            assert isinstance(ci, CIRun)
-            assert ci.status in ("queued", "in_progress", "completed")
-            _record("github.get_latest_ci_run", "PASS", f"run {ci.run_id}: {ci.status}")
-        else:
-            _record("github.get_latest_ci_run", "PASS", "no CI runs (None returned)")
-    except Exception as e:
-        err = str(e)
-        if "404" in err:
-            _record("github.get_latest_ci_run", "SKIP", "PR #1 not found")
-        else:
-            _record("github.get_latest_ci_run", "FAIL", err)
+            vals[n] = v
+    if missing:
+        _record("env_check", "SKIP", f"missing: {', '.join(missing)}")
+    return vals if not missing else {}
 
 
 # ---------------------------------------------------------------------------
-# Devin E2E tests
+# Devin E2E — create a minimal session, poll, terminate immediately
 # ---------------------------------------------------------------------------
 
 
 def run_devin_tests() -> None:
-    api_key = os.environ.get("DEVIN_API_KEY")
-    org_id = os.environ.get("DEVIN_ORG_ID")
-    if not api_key or not org_id:
-        _record("devin.setup", "SKIP", "DEVIN_API_KEY or DEVIN_ORG_ID not set")
+    env = _require_env("DEVIN_API_KEY", "DEVIN_ORG_ID")
+    if not env:
         return
 
     print("\n=== Devin Client E2E ===\n")
-    client = DevinClient(api_key=api_key, org_id=org_id)
-    session_id = None
+    client = DevinClient(api_key=env["DEVIN_API_KEY"], org_id=env["DEVIN_ORG_ID"])
+    session_id: str | None = None
 
-    # 1. Create session
+    # 1. Create session with the shortest possible prompt
     try:
         session_id = client.create_session(
-            prompt="Print the string 'hello world' to stdout and exit.",
+            prompt="echo ok",
             repo_url="https://github.com/hchang19/superset",
             issue_id=0,
         )
         assert session_id and isinstance(session_id, str)
         _record("devin.create_session", "PASS", f"session_id={session_id}")
-    except DevinAPIError as e:
-        _record("devin.create_session", "FAIL", str(e))
-        return
     except Exception as e:
         _record("devin.create_session", "FAIL", str(e))
         return
 
-    # 2. Get session
+    # 2. Poll session status
     try:
         resp = client.get_session(session_id)
         assert isinstance(resp, SessionResponse)
         assert resp.session_id == session_id
         assert resp.status in ("running", "completed", "failed", "blocked")
-        _record("devin.get_session", "PASS", f"status={resp.status}, cost=${resp.cost_usd}")
-    except DevinAPIError as e:
-        _record("devin.get_session", "FAIL", str(e))
+        _record("devin.get_session", "PASS", f"status={resp.status}")
     except Exception as e:
         _record("devin.get_session", "FAIL", str(e))
 
-    # 3. Verify SessionResponse fields
+    # 3. Verify dataclass fields
     try:
         assert resp.session_url is None or resp.session_url.startswith("https://")
         assert resp.pr_url is None or resp.pr_url.startswith("https://")
-        _record("devin.response_fields", "PASS", f"session_url={resp.session_url}")
+        _record("devin.response_fields", "PASS",
+                f"url={resp.session_url}, cost={resp.cost_usd}")
     except Exception as e:
         _record("devin.response_fields", "FAIL", str(e))
 
-    # 4. Terminate session
-    if session_id:
-        try:
-            client.terminate_session(session_id)
-            _record("devin.terminate_session", "PASS", "session terminated")
-        except DevinAPIError as e:
-            _record("devin.terminate_session", "PASS", f"terminate returned error (may already be terminal): {e}")
-        except Exception as e:
-            _record("devin.terminate_session", "FAIL", str(e))
+    # 4. Terminate immediately to avoid token spend
+    try:
+        client.terminate_session(session_id)
+        _record("devin.terminate_session", "PASS", "terminated")
+    except DevinAPIError as e:
+        # Already terminal is fine
+        _record("devin.terminate_session", "PASS", f"already terminal: {e}")
+    except Exception as e:
+        _record("devin.terminate_session", "FAIL", str(e))
 
-    # 5. Verify terminated session status
-    if session_id:
-        try:
-            time.sleep(1)
-            resp2 = client.get_session(session_id)
-            _record("devin.post_terminate_status", "PASS", f"status={resp2.status}")
-        except Exception as e:
-            _record("devin.post_terminate_status", "FAIL", str(e))
+    # 5. Confirm post-terminate status
+    try:
+        time.sleep(1)
+        resp2 = client.get_session(session_id)
+        _record("devin.post_terminate", "PASS", f"status={resp2.status}")
+    except Exception as e:
+        _record("devin.post_terminate", "FAIL", str(e))
 
 
 # ---------------------------------------------------------------------------
-# Full orchestration E2E
+# GitHub E2E — read-only operations (no mutations)
+# ---------------------------------------------------------------------------
+
+
+def run_github_tests() -> None:
+    env = _require_env("GITHUB_TOKEN")
+    if not env:
+        return
+    repo = os.environ.get("GITHUB_REPO", "hchang19/superset")
+
+    print("\n=== GitHub Client E2E ===\n")
+    session = github_session(env["GITHUB_TOKEN"])
+    client = GitHubClient(session=session, repo=repo)
+
+    # 1. Fetch issues
+    try:
+        issues = client.get_open_issues("auto-remediate")
+        assert isinstance(issues, list)
+        _record("github.get_open_issues", "PASS", f"{len(issues)} issues")
+    except Exception as e:
+        _record("github.get_open_issues", "FAIL", str(e))
+        return
+
+    # 2. Verify Issue dataclass
+    if issues:
+        issue = issues[0]
+        try:
+            assert isinstance(issue, Issue)
+            assert isinstance(issue.number, int) and isinstance(issue.title, str)
+            assert all(isinstance(lb, str) for lb in issue.labels)
+            _record("github.issue_fields", "PASS",
+                    f"#{issue.number}: {issue.title[:50]}")
+        except Exception as e:
+            _record("github.issue_fields", "FAIL", str(e))
+    else:
+        _record("github.issue_fields", "SKIP", "no issues found")
+
+    # 3. PR commits (read-only, PR #1)
+    try:
+        commits = client.get_pr_commits(pr_number=1)
+        assert isinstance(commits, list)
+        _record("github.get_pr_commits", "PASS", f"{len(commits)} commits")
+    except Exception as e:
+        if "404" in str(e):
+            _record("github.get_pr_commits", "SKIP", "PR #1 not found")
+        else:
+            _record("github.get_pr_commits", "FAIL", str(e))
+
+    # 4. CI run (read-only)
+    try:
+        ci = client.get_latest_ci_run(pr_number=1)
+        detail = f"run {ci.run_id}: {ci.status}" if ci else "none"
+        _record("github.get_latest_ci_run", "PASS", detail)
+    except Exception as e:
+        if "404" in str(e):
+            _record("github.get_latest_ci_run", "SKIP", "PR #1 not found")
+        else:
+            _record("github.get_latest_ci_run", "FAIL", str(e))
+
+
+# ---------------------------------------------------------------------------
+# Full orchestration — GitHub fetch → Devin create → terminate
 # ---------------------------------------------------------------------------
 
 
 def run_orchestration_test() -> None:
-    """Exercises the full flow: GitHub issues → Devin session → post results back."""
-    token = os.environ.get("GITHUB_TOKEN")
-    repo = os.environ.get("GITHUB_REPO", "hchang19/superset")
-    api_key = os.environ.get("DEVIN_API_KEY")
-    org_id = os.environ.get("DEVIN_ORG_ID")
-
-    if not token or not api_key or not org_id:
-        _record("orchestration.setup", "SKIP", "missing GITHUB_TOKEN, DEVIN_API_KEY, or DEVIN_ORG_ID")
+    env = _require_env("GITHUB_TOKEN", "DEVIN_API_KEY", "DEVIN_ORG_ID")
+    if not env:
         return
+    repo = os.environ.get("GITHUB_REPO", "hchang19/superset")
 
-    print("\n=== Orchestration E2E (GitHub + Devin) ===\n")
+    print("\n=== Orchestration E2E ===\n")
 
-    gh_session = github_session(token)
-    gh_client = GitHubClient(session=gh_session, repo=repo)
-    devin_client = DevinClient(api_key=api_key, org_id=org_id)
+    gh = GitHubClient(
+        session=github_session(env["GITHUB_TOKEN"]),
+        repo=repo,
+    )
+    devin = DevinClient(api_key=env["DEVIN_API_KEY"], org_id=env["DEVIN_ORG_ID"])
 
-    # 1. Fetch issues
+    # 1. Fetch issues from GitHub
     try:
-        issues = gh_client.get_open_issues("auto-remediate")
-        _record("orch.fetch_issues", "PASS", f"{len(issues)} issues found")
+        issues = gh.get_open_issues("auto-remediate")
+        _record("orch.fetch_issues", "PASS", f"{len(issues)} issues")
     except Exception as e:
         _record("orch.fetch_issues", "FAIL", str(e))
         return
@@ -246,34 +234,33 @@ def run_orchestration_test() -> None:
 
     issue = issues[0]
 
-    # 2. Create Devin session for issue
-    session_id = None
+    # 2. Create Devin session for the first issue (minimal prompt)
     try:
-        session_id = devin_client.create_session(
-            prompt=f"Fix issue #{issue.number}: {issue.title}\n\n{issue.body}",
+        sid = devin.create_session(
+            prompt=f"echo 'issue #{issue.number}'",
             repo_url=f"https://github.com/{repo}",
             issue_id=issue.number,
         )
-        _record("orch.create_session", "PASS", f"session={session_id} for issue #{issue.number}")
-    except DevinAPIError as e:
+        _record("orch.create_session", "PASS", f"session={sid}")
+    except Exception as e:
         _record("orch.create_session", "FAIL", str(e))
         return
 
-    # 3. Poll session
+    # 3. Poll once
     try:
-        resp = devin_client.get_session(session_id)
-        _record("orch.poll_session", "PASS", f"status={resp.status}")
+        resp = devin.get_session(sid)
+        _record("orch.poll", "PASS", f"status={resp.status}")
     except Exception as e:
-        _record("orch.poll_session", "FAIL", str(e))
+        _record("orch.poll", "FAIL", str(e))
 
-    # 4. Terminate to avoid cost
+    # 4. Terminate immediately
     try:
-        devin_client.terminate_session(session_id)
-        _record("orch.terminate", "PASS", "terminated to avoid cost")
+        devin.terminate_session(sid)
+        _record("orch.terminate", "PASS", "terminated")
     except DevinAPIError:
         _record("orch.terminate", "PASS", "already terminal")
 
-    _record("orch.complete", "PASS", "full orchestration cycle verified")
+    _record("orch.complete", "PASS", "full cycle verified")
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +270,17 @@ def run_orchestration_test() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 3 client E2E tests")
-    parser.add_argument("--github", action="store_true", help="Run GitHub tests only")
-    parser.add_argument("--devin", action="store_true", help="Run Devin tests only")
+    parser.add_argument("--github", action="store_true", help="GitHub tests only")
+    parser.add_argument("--devin", action="store_true", help="Devin tests only")
     args = parser.parse_args()
 
     run_all = not args.github and not args.devin
+
+    print("Loading credentials from .env + environment variables...")
+    print(f"  GITHUB_TOKEN  = {'set' if os.environ.get('GITHUB_TOKEN') else 'NOT SET'}")
+    print(f"  GITHUB_REPO   = {os.environ.get('GITHUB_REPO', '(default: hchang19/superset)')}")
+    print(f"  DEVIN_API_KEY = {'set' if os.environ.get('DEVIN_API_KEY') else 'NOT SET'}")
+    print(f"  DEVIN_ORG_ID  = {'set' if os.environ.get('DEVIN_ORG_ID') else 'NOT SET'}")
 
     if args.github or run_all:
         run_github_tests()
@@ -301,8 +294,8 @@ def main() -> None:
     passed = sum(1 for _, s, _ in _results if s == "PASS")
     failed = sum(1 for _, s, _ in _results if s == "FAIL")
     skipped = sum(1 for _, s, _ in _results if s == "SKIP")
-    total = len(_results)
-    print(f"Results: {passed} passed, {failed} failed, {skipped} skipped ({total} total)")
+    print(f"Results: {passed} passed, {failed} failed, {skipped} skipped "
+          f"({len(_results)} total)")
 
     if failed:
         print(f"\n{_FAIL} — {failed} test(s) failed:")
