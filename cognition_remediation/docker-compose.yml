@@ -12,6 +12,16 @@ services:
     environment:
       DB_PATH: /data/cognition.db
 
+  db:
+    image: coleifer/sqlite-web
+    command: sqlite_web --host 0.0.0.0 --port 8080 /data/cognition.db
+    ports:
+      - "8080:8080"
+    volumes:
+      - db-data:/data
+    depends_on:
+      - orchestrator
+
   dashboard:
     build: .
     command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
@@ -22,6 +32,8 @@ services:
     env_file: .env
     environment:
       DB_PATH: /data/cognition.db
+    depends_on:
+      - orchestrator
 
 volumes:
   db-data:
