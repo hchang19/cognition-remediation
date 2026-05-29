@@ -109,6 +109,79 @@ def test_get_session_raises_devin_api_error_on_5xx():
             client.get_session("sess-abc")
 
 
+@pytest.mark.unit
+def test_terminate_session_calls_post():
+    client = _make_client()
+    r = _mock_response(200, {})
+    client._session.post = MagicMock(return_value=r)
+
+    client.terminate_session("sess-abc")
+
+    args, _ = client._session.post.call_args
+    assert "sess-abc/terminate" in args[0]
+
+
+@pytest.mark.unit
+def test_terminate_session_raises_devin_api_error_on_failure():
+    client = _make_client()
+    r = MagicMock()
+    r.status_code = 500
+    r.headers = {}
+    exc = requests.HTTPError(response=r)
+    client._session.post = MagicMock(side_effect=exc)
+
+    with patch("time.sleep"):
+        with pytest.raises(DevinAPIError):
+            client.terminate_session("sess-abc")
+
+
+@pytest.mark.unit
+def test_create_session_raises_on_connection_error():
+    client = _make_client()
+    client._session.post = MagicMock(side_effect=requests.ConnectionError("DNS failure"))
+
+    with patch("time.sleep"):
+        with pytest.raises(DevinAPIError):
+            client.create_session("Fix CVE", "https://github.com/org/repo", issue_id=1)
+
+
+@pytest.mark.unit
+def test_get_session_raises_on_connection_error():
+    client = _make_client()
+    client._session.get = MagicMock(side_effect=requests.ConnectionError("DNS failure"))
+
+    with patch("time.sleep"):
+        with pytest.raises(DevinAPIError):
+            client.get_session("sess-abc")
+
+
+@pytest.mark.unit
+def test_create_session_uses_correct_url():
+    client = _make_client()
+    client._session.post = MagicMock(
+        return_value=_mock_response(200, {"session_id": "sess-abc"})
+    )
+
+    client.create_session("Fix CVE", "https://github.com/org/repo", issue_id=1)
+
+    args, _ = client._session.post.call_args
+    assert args[0] == "https://api.devin.ai/v3/organizations/org-test/sessions"
+
+
+@pytest.mark.unit
+def test_get_session_uses_correct_url():
+    client = _make_client()
+    client._session.get = MagicMock(return_value=_mock_response(200, {
+        "session_id": "sess-abc",
+        "status": "running",
+    }))
+
+    client.get_session("sess-abc")
+
+    args, _ = client._session.get.call_args
+    assert args[0] == "https://api.devin.ai/v3/organizations/org-test/sessions/sess-abc"
+
+
 @pytest.mark.skip(reason="Costs money — documents the real endpoint only")
 @pytest.mark.integration
 def test_create_session_real_devin_api():

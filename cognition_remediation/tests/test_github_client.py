@@ -134,6 +134,77 @@ def test_post_comment_sends_correct_payload():
     assert kwargs["json"] == {"body": "Devin is working on this."}
 
 
+@pytest.mark.unit
+def test_get_latest_ci_run_in_progress_has_no_completed_at():
+    client, session = _make_client()
+    _mock_get(session, [
+        {"head": {"sha": "abc123"}},
+        {"workflow_runs": [{
+            "id": 888,
+            "status": "in_progress",
+            "conclusion": None,
+            "run_started_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:30:00Z",
+        }]},
+    ])
+
+    result = client.get_latest_ci_run(pr_number=1)
+    assert isinstance(result, CIRun)
+    assert result.status == "in_progress"
+    assert result.conclusion is None
+    assert result.completed_at is None
+
+
+@pytest.mark.unit
+def test_get_open_issues_empty_body_defaults_to_empty_string():
+    client, session = _make_client()
+    _mock_get(session, [[
+        {"number": 1, "title": "No body", "labels": [], "body": None},
+    ]])
+
+    results = client.get_open_issues("auto-remediate")
+    assert results[0].body == ""
+
+
+@pytest.mark.unit
+def test_add_label_uses_correct_url():
+    client, session = _make_client("owner/repo")
+    r = MagicMock()
+    r.status_code = 200
+    r.raise_for_status.return_value = None
+    session.post.return_value = r
+
+    client.add_label(issue_number=42, label="auto-remediate")
+
+    args, _ = session.post.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/issues/42/labels"
+
+
+@pytest.mark.unit
+def test_post_comment_uses_correct_url():
+    client, session = _make_client("owner/repo")
+    r = MagicMock()
+    r.status_code = 201
+    r.raise_for_status.return_value = None
+    session.post.return_value = r
+
+    client.post_comment(issue_number=7, body="test comment")
+
+    args, _ = session.post.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/issues/7/comments"
+
+
+@pytest.mark.unit
+def test_get_pr_commits_uses_correct_url():
+    client, session = _make_client("owner/repo")
+    _mock_get(session, [[]])
+
+    client.get_pr_commits(pr_number=10)
+
+    args, _ = session.get.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/pulls/10/commits"
+
+
 @pytest.mark.integration
 def test_get_open_issues_real_github():
     import os

@@ -40,7 +40,28 @@ pytest -v
 pytest tests/test_retry.py -v
 pytest tests/test_db.py -v
 pytest tests/test_seeder.py -v
+pytest tests/test_devin_client.py -v
+pytest tests/test_github_client.py -v
+pytest tests/test_e2e.py -v
 ```
+
+## E2E Test Script
+
+A standalone script exercises both clients against real APIs:
+
+```bash
+# Full suite (Devin + GitHub + orchestration)
+python scripts/test_e2e.py
+
+# GitHub client only
+python scripts/test_e2e.py --github
+
+# Devin client only
+python scripts/test_e2e.py --devin
+```
+
+Requires `.env` with `GITHUB_TOKEN`, `GITHUB_REPO`, `DEVIN_API_KEY`, and `DEVIN_ORG_ID`.
+Devin sessions are terminated immediately after creation (cost < $0.01).
 
 ## Coverage by Module
 
@@ -49,6 +70,10 @@ pytest tests/test_seeder.py -v
 | `app/shared/retry.py` | `tests/test_retry.py` | 8 cases | 1 case |
 | `app/db.py` + `app/events.py` | `tests/test_db.py` | ~18 cases | 1 case |
 | `scripts/seed_issues.py` | `tests/test_seeder.py` | 9 cases | 1 case |
+| `app/devin_client.py` | `tests/test_devin_client.py` | 12 cases | 1 case (skipped) |
+| `app/github_client.py` | `tests/test_github_client.py` | 14 cases | 1 case |
+| Cross-client E2E | `tests/test_e2e.py` | 10 cases | — |
+| Live E2E script | `scripts/test_e2e.py` | — | 12+ checks |
 
 ## Adding Tests
 
