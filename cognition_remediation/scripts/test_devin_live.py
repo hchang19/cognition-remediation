@@ -54,6 +54,10 @@ def main() -> None:
     except DevinAPIError as e:
         print(f"   terminate failed (may already be terminal): {e}")
 
+    print("4. Fetching final status after termination...")
+    resp = client.get_session(session_id)
+    print(f"   status: {resp.status}")
+
     print("\nSummary:")
     print(json.dumps({
         "session_id": resp.session_id,
