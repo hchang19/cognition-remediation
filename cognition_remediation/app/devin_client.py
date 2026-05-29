@@ -99,7 +99,8 @@ class DevinClient:
     def terminate_session(self, session_id: str) -> None:
         """Terminate an active session immediately."""
         try:
-            self._post(f"{self._base}/sessions/{session_id}/terminate")
+            r = self._session.delete(f"{self._base}/sessions/{session_id}")
+            r.raise_for_status()
         except (requests.ConnectionError, requests.HTTPError) as exc:
             raise DevinAPIError(str(exc)) from exc
         logger.info("devin.session_terminated", extra={"session_id": session_id})
