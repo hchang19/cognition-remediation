@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     ci_first_pass      INTEGER,
     human_intervened   INTEGER,
     duration_seconds   INTEGER,
+    pr_merged          INTEGER,
     FOREIGN KEY (issue_id) REFERENCES issues(issue_id)
 );
 
@@ -86,6 +87,17 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         conn.executescript(_SCHEMA_SQL)
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply incremental column additions to existing databases."""
+    for stmt in [
+        "ALTER TABLE sessions ADD COLUMN pr_merged INTEGER",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
 def get_db(db_path: str) -> sqlite3.Connection:
     """Open a SQLite connection at ``db_path`` and ensure the schema exists.
 
@@ -109,5 +121,6 @@ def get_db(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     _apply_pragmas(conn)
     _create_schema(conn)
+    _migrate(conn)
     logger.info("db_opened", extra={"db_path": db_path})
     return conn

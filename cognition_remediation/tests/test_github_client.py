@@ -205,6 +205,47 @@ def test_get_pr_commits_uses_correct_url():
     assert args[0] == "https://api.github.com/repos/owner/repo/pulls/10/commits"
 
 
+@pytest.mark.unit
+def test_merge_pr_calls_correct_url():
+    client, session = _make_client("owner/repo")
+    r = MagicMock()
+    r.status_code = 200
+    r.raise_for_status.return_value = None
+    session.put.return_value = r
+
+    client.merge_pr(pr_number=42)
+
+    args, _ = session.put.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/pulls/42/merge"
+
+
+@pytest.mark.unit
+def test_merge_pr_uses_squash_by_default():
+    client, session = _make_client()
+    r = MagicMock()
+    r.status_code = 200
+    r.raise_for_status.return_value = None
+    session.put.return_value = r
+
+    client.merge_pr(pr_number=7)
+
+    _, kwargs = session.put.call_args
+    assert kwargs["json"]["merge_method"] == "squash"
+
+
+@pytest.mark.unit
+def test_merge_pr_raises_on_api_error():
+    client, session = _make_client()
+    r = MagicMock()
+    r.status_code = 405
+    r.headers = {}
+    exc = requests.HTTPError(response=r)
+    session.put.return_value = MagicMock(raise_for_status=MagicMock(side_effect=exc))
+
+    with pytest.raises(requests.HTTPError):
+        client.merge_pr(pr_number=1)
+
+
 @pytest.mark.integration
 def test_get_open_issues_real_github():
     import os

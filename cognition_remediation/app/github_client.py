@@ -133,3 +133,17 @@ class GitHubClient:
             json={"body": body},
         )
         logger.info("github.comment_posted", extra={"issue_number": issue_number})
+
+    @with_retry()
+    def _put(self, url: str, **kwargs) -> requests.Response:
+        r = self._session.put(url, **kwargs)
+        r.raise_for_status()
+        return r
+
+    def merge_pr(self, pr_number: int, merge_method: str = "squash") -> None:
+        """Merge a pull request. Raises requests.HTTPError on 405 (not mergeable) or 409 (conflict)."""
+        self._put(
+            f"{_GITHUB_API}/repos/{self._repo}/pulls/{pr_number}/merge",
+            json={"merge_method": merge_method},
+        )
+        logger.info("github.pr_merged", extra={"pr_number": pr_number, "merge_method": merge_method})

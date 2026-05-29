@@ -1,4 +1,4 @@
-"""Full pipeline demo: seed → dispatch → poll → metrics.
+"""Full pipeline demo: seed → dispatch → poll → metrics → (optional) auto-merge.
 
 Runs the complete remediation pipeline end-to-end:
   1. Load .env, open DB, create clients
@@ -7,11 +7,13 @@ Runs the complete remediation pipeline end-to-end:
   4. Dispatch each issue to handle_issue() (creates Devin sessions)
   5. Poll loop: every 30s until no running sessions (or 30min timeout)
   6. Capture PR commits + CI outcomes via _poll_prs()
-  7. Print a metrics table
+  7. (Optional) Auto-merge eligible PRs
+  8. Print a metrics table
 
 Run:
     python3 scripts/demo.py
-    python3 scripts/demo.py --dry-run   # skip polling, show existing DB data
+    python3 scripts/demo.py --dry-run          # skip polling, show existing DB data
+    python3 scripts/demo.py --auto-merge       # merge complexity:definite PRs that pass CI
 """
 
 from __future__ import annotations
@@ -154,12 +156,56 @@ def _cycle_minutes(session_row, db) -> str:
     return "-"
 
 
+def merge_eligible_prs(db, gh: GitHubClient) -> list[int]:
+    """Merge PRs from completed, definite-complexity, CI-passing, no-human-intervention sessions.
+
+    A PR is eligible when:
+      - session status = "completed"
+      - complexity = "definite"  (well-scoped, no ambiguity)
+      - ci_first_pass = 1        (all tests pass on first run)
+      - human_intervened = 0/NULL (Devin authored every commit)
+      - pr_merged IS NULL        (not already merged by this script)
+
+    Returns the list of merged PR numbers.
+    """
+    rows = db.execute(
+        """
+        SELECT s.session_id, s.pr_number, i.complexity
+        FROM sessions s
+        JOIN issues i ON i.issue_id = s.issue_id
+        WHERE s.status = 'completed'
+          AND s.pr_number IS NOT NULL
+          AND s.pr_merged IS NULL
+          AND s.ci_first_pass = 1
+          AND (s.human_intervened = 0 OR s.human_intervened IS NULL)
+          AND i.complexity = 'definite'
+        """
+    ).fetchall()
+
+    merged: list[int] = []
+    for row in rows:
+        pr = row["pr_number"]
+        try:
+            gh.merge_pr(pr)
+            with db:
+                db.execute(
+                    "UPDATE sessions SET pr_merged=1 WHERE session_id=?",
+                    (row["session_id"],),
+                )
+            merged.append(pr)
+            print(f"  #{pr} merged  (complexity:definite, CI passed, no human commits)")
+        except Exception as exc:
+            print(f"  #{pr} merge FAILED: {exc}")
+
+    return merged
+
+
 def print_metrics_table(db) -> None:
     rows = db.execute(
         """
         SELECT s.session_id, s.issue_id, s.status, s.cost_usd,
                s.ci_first_pass, s.human_intervened, s.commits_count,
-               s.session_url, s.pr_number, s.completed_at,
+               s.session_url, s.pr_number, s.completed_at, s.pr_merged,
                i.title
         FROM sessions s
         JOIN issues i ON i.issue_id = s.issue_id
@@ -183,21 +229,24 @@ def print_metrics_table(db) -> None:
     print(hdr)
     print("-" * len(hdr))
 
-    completed = failed = declined_count = 0
+    completed = failed = declined_count = merged_count = 0
     total_cost = 0.0
     ci_passes = ci_total = human_count = 0
 
     for row in rows:
         title = row["title"][:25] if row["title"] else ""
         cycle = _cycle_minutes(row, db)
+        display_status = "merged" if row["pr_merged"] else row["status"]
         print(
-            f"#{row['issue_id']:<4} {title:<26} {row['status']:<11} "
+            f"#{row['issue_id']:<4} {title:<26} {display_status:<11} "
             f"{_fmt_cost(row['cost_usd']):<8} {_fmt_ci(row['ci_first_pass']):<6} "
             f"{_fmt_bool(row['human_intervened']):<7} {_fmt_int(row['commits_count']):<9} "
             f"{_fmt_pr(row['pr_number']):<5} {cycle}"
         )
         if row["status"] == "completed":
             completed += 1
+            if row["pr_merged"]:
+                merged_count += 1
         elif row["status"] == "failed":
             failed += 1
         if row["cost_usd"] is not None:
@@ -220,6 +269,7 @@ def print_metrics_table(db) -> None:
     print(
         f"Total sessions: {total_sessions}  |  "
         f"Completed: {completed}  |  "
+        f"Merged: {merged_count}  |  "
         f"Failed: {failed}  |  "
         f"Declined: {declined_count}"
     )
@@ -245,6 +295,15 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="Skip polling; print existing DB metrics only",
+    )
+    parser.add_argument(
+        "--auto-merge",
+        action="store_true",
+        help=(
+            "After sessions complete, squash-merge PRs where complexity=definite, "
+            "CI passes on first run, and no human commits were detected. "
+            "Without this flag, PRs are opened but never merged."
+        ),
     )
     args = parser.parse_args()
 
@@ -386,7 +445,16 @@ def main() -> int:
         print(f"  WARNING: PR metrics capture failed: {exc}")
 
     # -----------------------------------------------------------------------
-    # Step 6: Print metrics table
+    # Step 6: Auto-merge eligible PRs (opt-in)
+    # -----------------------------------------------------------------------
+    if args.auto_merge:
+        print("\nAuto-merging eligible PRs...")
+        merged = merge_eligible_prs(db, gh)
+        if not merged:
+            print("  No PRs eligible for auto-merge.")
+
+    # -----------------------------------------------------------------------
+    # Step 7: Print metrics table
     # -----------------------------------------------------------------------
     print_metrics_table(db)
 
