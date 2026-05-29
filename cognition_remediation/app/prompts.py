@@ -33,7 +33,7 @@ Instructions:
 - Change only what is required to resolve the issue
 - Do not refactor surrounding code
 - Run existing tests without modifying them
-- Open a PR referencing issue #{issue.number}
+- Open a PR that closes issue #{issue.number} — include "Closes #{issue.number}" in the PR description so GitHub auto-closes the issue on merge
 """
 
 
@@ -50,5 +50,5 @@ Instructions:
 - Document root cause in the PR description before implementing
 - If a fix requires a design decision, open a follow-up issue instead of choosing unilaterally
 - Branch name: fix/{issue.number}-{_slug(issue.title)}
-- Open a PR with: root cause, what changed, open questions
+- Open a PR that closes issue #{issue.number} — include "Closes #{issue.number}" in the PR description; include root cause, what changed, open questions
 """
