@@ -48,3 +48,17 @@ def test_semi_definite_prompt_asks_to_document_root_cause():
     issue = Issue(number=1, title="T", labels=[], body="")
     result = semi_definite_prompt(issue)
     assert "root cause" in result.lower()
+
+
+@pytest.mark.unit
+def test_definite_prompt_includes_contributing_guide_instruction():
+    issue = Issue(number=1, title="T", labels=[], body="")
+    result = definite_prompt(issue)
+    assert "CONTRIBUTING.md" in result
+
+
+@pytest.mark.unit
+def test_semi_definite_prompt_includes_contributing_guide_instruction():
+    issue = Issue(number=1, title="T", labels=[], body="")
+    result = semi_definite_prompt(issue)
+    assert "CONTRIBUTING.md" in result

@@ -14,6 +14,12 @@ def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40]
 
 
+_CONTRIBUTION_GUIDE_INSTRUCTION = (
+    "- Before writing any code, read CONTRIBUTING.md in the repository root "
+    "and follow its conventions for commits, testing, and PR style"
+)
+
+
 def definite_prompt(issue: Issue) -> str:
     return f"""You are remediating a security vulnerability in apache/superset.
 
@@ -23,6 +29,7 @@ Issue #{issue.number}: {issue.title}
 
 Instructions:
 - Branch name: fix/{issue.number}-{_slug(issue.title)}
+{_CONTRIBUTION_GUIDE_INSTRUCTION}
 - Change only what is required to resolve the issue
 - Do not refactor surrounding code
 - Run existing tests without modifying them
@@ -39,6 +46,7 @@ Issue #{issue.number}: {issue.title}
 
 Instructions:
 - Read the full issue before touching code
+{_CONTRIBUTION_GUIDE_INSTRUCTION}
 - Document root cause in the PR description before implementing
 - If a fix requires a design decision, open a follow-up issue instead of choosing unilaterally
 - Branch name: fix/{issue.number}-{_slug(issue.title)}
