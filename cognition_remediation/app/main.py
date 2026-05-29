@@ -37,7 +37,7 @@ def create_app(
 
     resolved_cfg = cfg or load_config()
     resolved_db = db or get_db(resolved_cfg.db_path)
-    resolved_devin = devin or DevinClient(api_key=resolved_cfg.devin_api_key)
+    resolved_devin = devin or DevinClient(api_key=resolved_cfg.devin_api_key, org_id=resolved_cfg.devin_org_id)
     resolved_gh = gh or GitHubClient(
         session=github_session(resolved_cfg.github_token),
         repo=resolved_cfg.github_repo,

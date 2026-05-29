@@ -12,7 +12,7 @@ from app.orchestrator import handle_issue
 def _cfg(**overrides) -> Config:
     defaults = dict(
         github_token="t", github_repo="o/r", github_webhook_secret=None,
-        devin_api_key="k", devin_daily_limit=10, pause=False, db_path=":memory:",
+        devin_api_key="k", devin_org_id="org-test", devin_daily_limit=10, pause=False, db_path=":memory:",
     )
     defaults.update(overrides)
     return Config(**defaults)

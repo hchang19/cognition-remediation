@@ -16,7 +16,7 @@ def _make_app(webhook_secret: str | None = None):
     cfg = Config(
         github_token="t", github_repo="o/r",
         github_webhook_secret=webhook_secret,
-        devin_api_key="k", devin_daily_limit=10,
+        devin_api_key="k", devin_org_id="org-test", devin_daily_limit=10,
         pause=False, db_path=":memory:",
     )
     db = get_db(":memory:")
