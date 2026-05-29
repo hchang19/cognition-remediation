@@ -18,6 +18,8 @@ def _make_app(webhook_secret: str | None = None):
         github_webhook_secret=webhook_secret,
         devin_api_key="k", devin_org_id="org-test", devin_daily_limit=10,
         pause=False, db_path=":memory:",
+        devin_session_cost_limit_usd=None,
+        devin_session_time_limit_minutes=None,
     )
     db = get_db(":memory:")
     devin = MagicMock(spec=DevinClient)

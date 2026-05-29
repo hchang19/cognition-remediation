@@ -20,6 +20,8 @@ class Config:
     devin_daily_limit: int
     pause: bool
     db_path: str
+    devin_session_cost_limit_usd: float | None    # terminate if cost exceeds this; None = no limit
+    devin_session_time_limit_minutes: int | None  # terminate if session age exceeds this; None = no limit
 
 
 def _require(name: str) -> str:
@@ -27,6 +29,16 @@ def _require(name: str) -> str:
     if not value:
         raise ConfigError(f"Required environment variable {name} is not set")
     return value
+
+
+def _optional_float(name: str) -> float | None:
+    value = os.environ.get(name)
+    return float(value) if value else None
+
+
+def _optional_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    return int(value) if value else None
 
 
 def load_config() -> Config:
@@ -39,4 +51,6 @@ def load_config() -> Config:
         devin_daily_limit=int(os.environ.get("DEVIN_DAILY_SESSION_LIMIT", "10")),
         pause=bool(os.environ.get("PAUSE")),
         db_path=os.environ.get("DB_PATH", "cognition.db"),
+        devin_session_cost_limit_usd=_optional_float("DEVIN_SESSION_COST_LIMIT_USD"),
+        devin_session_time_limit_minutes=_optional_int("DEVIN_SESSION_TIME_LIMIT_MINUTES"),
     )

@@ -33,6 +33,8 @@ def _cfg(**overrides) -> Config:
         devin_daily_limit=10,
         pause=False,
         db_path=":memory:",
+        devin_session_cost_limit_usd=None,
+        devin_session_time_limit_minutes=None,
     )
     defaults.update(overrides)
     return Config(**defaults)

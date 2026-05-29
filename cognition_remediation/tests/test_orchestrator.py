@@ -13,6 +13,7 @@ def _cfg(**overrides) -> Config:
     defaults = dict(
         github_token="t", github_repo="o/r", github_webhook_secret=None,
         devin_api_key="k", devin_org_id="org-test", devin_daily_limit=10, pause=False, db_path=":memory:",
+        devin_session_cost_limit_usd=None, devin_session_time_limit_minutes=None,
     )
     defaults.update(overrides)
     return Config(**defaults)
