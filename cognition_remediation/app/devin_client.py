@@ -15,7 +15,7 @@ from app.shared.retry import with_retry
 
 logger = get_logger(__name__)
 
-_BASE_URL = "https://api.cognition.ai/v1"
+_API_ROOT = "https://api.devin.ai/v3"
 
 
 class DevinAPIError(Exception):
@@ -33,7 +33,8 @@ class SessionResponse:
 
 
 class DevinClient:
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, org_id: str) -> None:
+        self._base = f"{_API_ROOT}/organizations/{org_id}"
         self._session = requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {api_key}",
@@ -56,14 +57,16 @@ class DevinClient:
         """Start a Devin session. Returns session_id."""
         try:
             r = self._post(
-                f"{_BASE_URL}/sessions",
+                f"{self._base}/sessions",
                 json={
                     "prompt": prompt,
                     "repo_url": repo_url,
                     "metadata": {"issue_id": issue_id},
                 },
             )
-        except (requests.ConnectionError, requests.HTTPError) as exc:
+        except requests.HTTPError as exc:
+            raise DevinAPIError(f"{exc} — body: {exc.response.text}") from exc
+        except requests.ConnectionError as exc:
             raise DevinAPIError(str(exc)) from exc
         session_id = r.json()["session_id"]
         logger.info(
@@ -75,7 +78,7 @@ class DevinClient:
     def get_session(self, session_id: str) -> SessionResponse:
         """Fetch current session state."""
         try:
-            r = self._get(f"{_BASE_URL}/sessions/{session_id}")
+            r = self._get(f"{self._base}/sessions/{session_id}")
         except (requests.ConnectionError, requests.HTTPError) as exc:
             raise DevinAPIError(str(exc)) from exc
         data = r.json()
@@ -92,3 +95,11 @@ class DevinClient:
             extra={"session_id": session_id, "status": response.status},
         )
         return response
+
+    def terminate_session(self, session_id: str) -> None:
+        """Terminate an active session immediately."""
+        try:
+            self._post(f"{self._base}/sessions/{session_id}/terminate")
+        except (requests.ConnectionError, requests.HTTPError) as exc:
+            raise DevinAPIError(str(exc)) from exc
+        logger.info("devin.session_terminated", extra={"session_id": session_id})

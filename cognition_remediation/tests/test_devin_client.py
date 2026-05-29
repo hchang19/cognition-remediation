@@ -6,7 +6,7 @@ from app.devin_client import DevinClient, DevinAPIError, SessionResponse
 
 
 def _make_client() -> DevinClient:
-    return DevinClient(api_key="test-key")
+    return DevinClient(api_key="test-key", org_id="org-test")
 
 
 def _mock_response(status_code: int, body: dict) -> MagicMock:
