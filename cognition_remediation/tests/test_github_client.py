@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, call
 import requests
 
-from app.github_client import GitHubClient, Issue, Commit, CIRun
+from app.github_client import GitHubClient, Issue, Commit, CIRun, PullRequest
 from app.shared.github_session import github_session
 
 
@@ -244,6 +244,75 @@ def test_merge_pr_raises_on_api_error():
 
     with pytest.raises(requests.HTTPError):
         client.merge_pr(pr_number=1)
+
+
+@pytest.mark.unit
+def test_close_issue_uses_correct_url_and_payload():
+    client, session = _make_client("owner/repo")
+    r = MagicMock()
+    r.status_code = 200
+    r.raise_for_status.return_value = None
+    session.patch.return_value = r
+
+    client.close_issue(issue_number=9)
+
+    args, kwargs = session.patch.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/issues/9"
+    assert kwargs["json"] == {"state": "closed"}
+
+
+@pytest.mark.unit
+def test_close_pr_uses_correct_url_and_payload():
+    client, session = _make_client("owner/repo")
+    r = MagicMock()
+    r.status_code = 200
+    r.raise_for_status.return_value = None
+    session.patch.return_value = r
+
+    client.close_pr(pr_number=12)
+
+    args, kwargs = session.patch.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/pulls/12"
+    assert kwargs["json"] == {"state": "closed"}
+
+
+@pytest.mark.unit
+def test_delete_branch_uses_correct_url():
+    client, session = _make_client("owner/repo")
+    r = MagicMock()
+    r.status_code = 204
+    r.raise_for_status.return_value = None
+    session.delete.return_value = r
+
+    client.delete_branch("fix/42-upgrade-urllib3")
+
+    args, _ = session.delete.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/git/refs/heads/fix/42-upgrade-urllib3"
+
+
+@pytest.mark.unit
+def test_get_open_prs_returns_prs():
+    client, session = _make_client()
+    _mock_get(session, [[
+        {"number": 10, "title": "Fix urllib3", "head": {"ref": "fix/10-upgrade-urllib3"}},
+        {"number": 11, "title": "Fix lxml", "head": {"ref": "fix/11-lxml"}},
+    ]])
+
+    results = client.get_open_prs()
+    assert len(results) == 2
+    assert results[0] == PullRequest(number=10, head_ref="fix/10-upgrade-urllib3", title="Fix urllib3")
+    assert results[1] == PullRequest(number=11, head_ref="fix/11-lxml", title="Fix lxml")
+
+
+@pytest.mark.unit
+def test_get_open_prs_paginates():
+    client, session = _make_client()
+    page1 = [{"number": i, "title": f"PR {i}", "head": {"ref": f"fix/{i}-slug"}} for i in range(100)]
+    page2 = [{"number": 100, "title": "PR 100", "head": {"ref": "fix/100-slug"}}]
+    _mock_get(session, [page1, page2])
+
+    results = client.get_open_prs()
+    assert len(results) == 101
 
 
 @pytest.mark.integration
