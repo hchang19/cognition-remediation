@@ -64,6 +64,7 @@ class TestDevinClientLifecycle:
         ]
         client._session.post = MagicMock(side_effect=post_responses)
         client._session.get = MagicMock(side_effect=get_responses)
+        client._session.delete = MagicMock(return_value=_mock_response(200, {}))
 
         session_id = client.create_session(
             prompt="Fix CVE-2024-1234",
@@ -84,8 +85,9 @@ class TestDevinClientLifecycle:
 
         client.terminate_session(session_id)
 
-        assert client._session.post.call_count == 2
+        assert client._session.post.call_count == 1  # create only
         assert client._session.get.call_count == 2
+        assert client._session.delete.call_count == 1
 
     @pytest.mark.unit
     def test_session_fails_and_is_retried(self):

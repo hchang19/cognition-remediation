@@ -110,15 +110,15 @@ def test_get_session_raises_devin_api_error_on_5xx():
 
 
 @pytest.mark.unit
-def test_terminate_session_calls_post():
+def test_terminate_session_calls_delete():
     client = _make_client()
     r = _mock_response(200, {})
-    client._session.post = MagicMock(return_value=r)
+    client._session.delete = MagicMock(return_value=r)
 
     client.terminate_session("sess-abc")
 
-    args, _ = client._session.post.call_args
-    assert "sess-abc/terminate" in args[0]
+    args, _ = client._session.delete.call_args
+    assert args[0].endswith("/sessions/sess-abc")
 
 
 @pytest.mark.unit
@@ -128,11 +128,10 @@ def test_terminate_session_raises_devin_api_error_on_failure():
     r.status_code = 500
     r.headers = {}
     exc = requests.HTTPError(response=r)
-    client._session.post = MagicMock(side_effect=exc)
+    client._session.delete = MagicMock(side_effect=exc)
 
-    with patch("time.sleep"):
-        with pytest.raises(DevinAPIError):
-            client.terminate_session("sess-abc")
+    with pytest.raises(DevinAPIError):
+        client.terminate_session("sess-abc")
 
 
 @pytest.mark.unit
