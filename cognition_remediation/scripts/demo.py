@@ -14,6 +14,8 @@ Run:
     python3 scripts/demo.py
     python3 scripts/demo.py --dry-run          # skip polling, show existing DB data
     python3 scripts/demo.py --auto-merge       # merge complexity:definite PRs that pass CI
+    python3 scripts/demo.py --verbose          # per-issue/per-session detail for live demos
+    python3 scripts/demo.py --log              # re-enable structured JSON logs (for background runs)
 """
 
 from __future__ import annotations
@@ -32,6 +34,14 @@ sys.path.insert(0, os.path.join(_root, "..", "pypackages"))
 from dotenv import load_dotenv
 
 load_dotenv()
+
+try:
+    from tqdm import tqdm as _tqdm, trange as _trange
+    _HAS_TQDM = True
+except ImportError:
+    _HAS_TQDM = False
+
+import uuid
 
 from app.db import get_db
 from app.devin_client import DevinClient
@@ -68,12 +78,50 @@ POLL_INTERVAL = 30          # seconds between each _poll_sessions call
 POLL_TIMEOUT = 30 * 60      # 30-minute hard stop
 
 
+class _SandboxDevinClient:
+    """Drop-in Devin client for sandbox runs — no API calls, fake session IDs.
+
+    Lets the full orchestrator code path (routing, DB writes, event log) run
+    without real API calls or cost. Simulates realistic status transitions:
+      poll 0-1 → running, poll 2+ → completed
+    """
+
+    def __init__(self) -> None:
+        self._poll_counts: dict[str, int] = {}
+
+    def create_session(self, prompt: str, repo_url: str, issue_id: int) -> str:
+        fake_id = f"sandbox-{uuid.uuid4().hex[:12]}"
+        self._poll_counts[fake_id] = 0
+        print(f"    [sandbox] fake session {fake_id}")
+        return fake_id
+
+    def get_session(self, session_id: str) -> "SessionResponse":  # type: ignore[name-defined]
+        from app.devin_client import SessionResponse
+        count = self._poll_counts.get(session_id, 0)
+        self._poll_counts[session_id] = count + 1
+        if count < 2:
+            return SessionResponse(
+                session_id=session_id, status="running", status_detail="working",
+                cost_usd=None, session_url=f"https://app.devin.ai/sessions/{session_id}",
+                pr_url=None, output=None,
+            )
+        return SessionResponse(
+            session_id=session_id, status="completed", status_detail=None,
+            cost_usd=0.12,
+            session_url=f"https://app.devin.ai/sessions/{session_id}",
+            pr_url=None, output="Sandbox: applied fix.",
+        )
+
+    def terminate_session(self, session_id: str) -> None:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Seeding helpers
 # ---------------------------------------------------------------------------
 
 
-def seed_issues(session, repo: str) -> int:
+def seed_issues(session, repo: str, verbose: bool = False) -> int:
     """Seed issues.yml into the repo. Returns count of issues created."""
     issues_cfg = load_issues(DEFAULT_CONFIG_PATH)
     ensure_labels(session, repo, _collect_labels(issues_cfg))
@@ -85,10 +133,16 @@ def seed_issues(session, repo: str) -> int:
         if not key:
             continue
         if _already_seeded(key, existing_bodies):
+            if verbose:
+                labels = " ".join(f"[{l}]" for l in issue.get("labels", []))
+                print(f"    skip  {issue.get('title', '')[:50]}  {labels}")
             continue
         result = create_issue(session, repo, issue)
         existing_bodies.append(result.get("body") or issue.get("body", ""))
         created += 1
+        if verbose:
+            labels = " ".join(f"[{l}]" for l in issue.get("labels", []))
+            print(f"    new   #{result.get('number', '?')}  {issue.get('title', '')[:50]}  {labels}")
 
     return created
 
@@ -170,7 +224,7 @@ def merge_eligible_prs(db, gh: GitHubClient) -> list[int]:
     """
     rows = db.execute(
         """
-        SELECT s.session_id, s.pr_number, i.complexity
+        SELECT s.session_id, s.pr_number, s.issue_id, i.complexity
         FROM sessions s
         JOIN issues i ON i.issue_id = s.issue_id
         WHERE s.status = 'completed'
@@ -185,6 +239,7 @@ def merge_eligible_prs(db, gh: GitHubClient) -> list[int]:
     merged: list[int] = []
     for row in rows:
         pr = row["pr_number"]
+        issue_id = row["issue_id"]
         try:
             gh.merge_pr(pr)
             with db:
@@ -196,6 +251,16 @@ def merge_eligible_prs(db, gh: GitHubClient) -> list[int]:
             print(f"  #{pr} merged  (complexity:definite, CI passed, no human commits)")
         except Exception as exc:
             print(f"  #{pr} merge FAILED: {exc}")
+            continue
+
+        # Close the linked issue now that the PR is merged.
+        # GitHub auto-closes on "Closes #N" in the PR body, but we also close
+        # explicitly here in case Devin omitted the keyword.
+        try:
+            gh.close_issue(issue_id)
+            print(f"  issue #{issue_id} closed")
+        except Exception as exc:
+            print(f"  issue #{issue_id} close FAILED: {exc}")
 
     return merged
 
@@ -229,7 +294,7 @@ def print_metrics_table(db) -> None:
     print(hdr)
     print("-" * len(hdr))
 
-    completed = failed = declined_count = merged_count = 0
+    completed = failed = declined_count = merged_count = pending_count = 0
     total_cost = 0.0
     ci_passes = ci_total = human_count = 0
 
@@ -249,6 +314,8 @@ def print_metrics_table(db) -> None:
                 merged_count += 1
         elif row["status"] == "failed":
             failed += 1
+        elif row["status"] == "pending":
+            pending_count += 1
         if row["cost_usd"] is not None:
             total_cost += row["cost_usd"]
         if row["ci_first_pass"] is not None:
@@ -270,6 +337,7 @@ def print_metrics_table(db) -> None:
         f"Total sessions: {total_sessions}  |  "
         f"Completed: {completed}  |  "
         f"Merged: {merged_count}  |  "
+        f"Pending: {pending_count}  |  "
         f"Failed: {failed}  |  "
         f"Declined: {declined_count}"
     )
@@ -305,7 +373,63 @@ def main() -> int:
             "Without this flag, PRs are opened but never merged."
         ),
     )
+    parser.add_argument(
+        "--no-seed",
+        action="store_true",
+        help="Skip issue seeding (use existing open issues only)",
+    )
+    parser.add_argument(
+        "--seed-delay",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help=(
+            "Seconds to wait after seeding before dispatching Devin sessions. "
+            "Useful in demos to observe the seeded issues before Devin picks them up "
+            "(default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--dispatch-limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Dispatch at most N issues (useful for sampling a subset in demos).",
+    )
+    parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        help=(
+            "Use a fake Devin client — exercises the full orchestrator routing and DB "
+            "writes without real API calls or cost. Incompatible with --dry-run."
+        ),
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help=(
+            "Demo-friendly verbose output: per-issue seed detail, per-session poll "
+            "status with session URLs, and per-PR CI/commit breakdown."
+        ),
+    )
+    parser.add_argument(
+        "--log",
+        action="store_true",
+        help=(
+            "Re-enable INFO-level structured JSON logs from all app modules. "
+            "Intended for background runs piped to a log file. "
+            "Outputs to stderr alongside the normal demo output."
+        ),
+    )
     args = parser.parse_args()
+
+    # --log: restore INFO-level structured logs suppressed by default above.
+    if args.log:
+        for _name in (
+            "scripts.seed_issues", "app.orchestrator", "app.poller",
+            "app.events", "app.db", "app.devin_client", "app.github_client",
+        ):
+            logging.getLogger(_name).setLevel(logging.INFO)
 
     print("\n=== Cognition Remediation Demo ===")
 
@@ -313,20 +437,44 @@ def main() -> int:
     db = get_db(cfg.db_path)
     gh_session = github_session(cfg.github_token)
     gh = GitHubClient(gh_session, cfg.github_repo)
-    devin = DevinClient(cfg.devin_api_key, cfg.devin_org_id)
 
-    dry_run = args.dry_run or cfg.pause or cfg.devin_daily_limit == 0
+    if args.sandbox:
+        devin = _SandboxDevinClient()
+        dry_run = False  # sandbox bypasses the dry_run gate intentionally
+        print("  [sandbox] Using fake Devin client — no real API calls.")
+    else:
+        devin = DevinClient(cfg.devin_api_key, cfg.devin_org_id)
+        dry_run = args.dry_run or cfg.pause or cfg.devin_daily_limit == 0
 
     # -----------------------------------------------------------------------
     # Step 1: Seed issues
     # -----------------------------------------------------------------------
-    print("\nSeeding issues...", end=" ", flush=True)
-    try:
-        n_created = seed_issues(gh_session, cfg.github_repo)
-        print(f"done ({n_created} new)")
-    except Exception as exc:
-        print(f"ERROR: {exc}")
-        return 1
+    if args.no_seed:
+        print("\nSkipping seed (--no-seed)")
+    else:
+        print("\nSeeding issues...", flush=True) if args.verbose else print("\nSeeding issues...", end=" ", flush=True)
+        try:
+            n_created = seed_issues(gh_session, cfg.github_repo, verbose=args.verbose)
+            print(f"  done ({n_created} new)" if args.verbose else f"done ({n_created} new)")
+        except Exception as exc:
+            print(f"ERROR: {exc}")
+            return 1
+
+        if args.seed_delay > 0 and not dry_run:
+            if _HAS_TQDM:
+                for _ in _trange(
+                    args.seed_delay,
+                    desc="  Seed delay",
+                    unit="s",
+                    ncols=72,
+                    bar_format="{l_bar}{bar}| {n}/{total}s",
+                ):
+                    time.sleep(1)
+            else:
+                for remaining in range(args.seed_delay, 0, -1):
+                    print(f"\r  {remaining}s remaining...   ", end="", flush=True)
+                    time.sleep(1)
+                print()
 
     # -----------------------------------------------------------------------
     # Step 2: Fetch open auto-remediate issues
@@ -349,8 +497,12 @@ def main() -> int:
     # Step 3: Dispatch — call handle_issue for each
     # -----------------------------------------------------------------------
     if not dry_run:
-        print("Dispatching Devin sessions...")
-        for issue in issues:
+        dispatch_issues = issues[:args.dispatch_limit] if args.dispatch_limit else issues
+        if args.dispatch_limit and len(issues) > args.dispatch_limit:
+            print(f"Dispatching Devin sessions... (limit {args.dispatch_limit} of {len(issues)})")
+        else:
+            print("Dispatching Devin sessions...")
+        for issue in dispatch_issues:
             complexity = next(
                 (lb.split(":", 1)[1] for lb in issue.labels if lb.startswith("complexity:")),
                 "ambiguous",
@@ -361,15 +513,17 @@ def main() -> int:
             after = db.execute("SELECT COUNT(*) FROM sessions WHERE issue_id=?", (issue.number,)).fetchone()[0]
 
             if after > before:
-                # New session was created — find its session_id
                 sess = db.execute(
                     "SELECT session_id FROM sessions WHERE issue_id=? ORDER BY rowid DESC LIMIT 1",
                     (issue.number,),
                 ).fetchone()
                 sess_id = sess["session_id"] if sess else "?"
                 print(f"  #{issue.number} {issue.title[:40]} ({complexity})  → session {sess_id}")
+                if args.verbose:
+                    label_str = "  ".join(issue.labels)
+                    print(f"    labels: {label_str}")
+                    print(f"    prompt: {'definite_prompt' if complexity == 'definite' else 'semi_definite_prompt'}")
             else:
-                # Check if declined
                 declined = db.execute(
                     "SELECT 1 FROM events WHERE issue_id=? AND event_type='session.declined'",
                     (issue.number,),
@@ -386,12 +540,17 @@ def main() -> int:
         print("\nPolling for completion... (Ctrl+C to stop)")
         start = time.monotonic()
         elapsed_intervals = 0
+        _poll_bar = (
+            _tqdm(total=POLL_TIMEOUT, unit="s", ncols=72, desc="  Elapsed",
+                  bar_format="{l_bar}{bar}| {n:.0f}/{total}s")
+            if _HAS_TQDM else None
+        )
         try:
             while True:
-                running_count = db.execute(
-                    "SELECT COUNT(*) FROM sessions WHERE status='running'"
+                active_count = db.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE status IN ('running', 'pending')"
                 ).fetchone()[0]
-                if running_count == 0:
+                if active_count == 0:
                     break
 
                 elapsed = time.monotonic() - start
@@ -403,22 +562,52 @@ def main() -> int:
                 minutes = int(elapsed_intervals * POLL_INTERVAL // 60)
                 seconds = (elapsed_intervals * POLL_INTERVAL) % 60
 
+                running_count = db.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE status='running'"
+                ).fetchone()[0]
+                pending_count = db.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE status='pending'"
+                ).fetchone()[0]
                 completed_count = db.execute(
                     "SELECT COUNT(*) FROM sessions WHERE status='completed'"
                 ).fetchone()[0]
                 failed_count = db.execute(
                     "SELECT COUNT(*) FROM sessions WHERE status='failed'"
                 ).fetchone()[0]
-                print(
+
+                status_line = (
                     f"  [{minutes:02d}:{seconds:02d}] "
-                    f"{running_count} running, {completed_count} completed, {failed_count} failed"
+                    f"{running_count} running, {pending_count} pending, "
+                    f"{completed_count} completed, {failed_count} failed"
                 )
+                if _poll_bar:
+                    _poll_bar.set_postfix_str(
+                        f"{running_count} run  {pending_count} pend  "
+                        f"{completed_count} done  {failed_count} fail"
+                    )
+                    _poll_bar.update(POLL_INTERVAL)
+                else:
+                    print(status_line)
+
+                if args.verbose:
+                    live = db.execute(
+                        "SELECT s.session_id, s.status, s.status_detail, s.session_url, i.title "
+                        "FROM sessions s JOIN issues i ON i.issue_id = s.issue_id "
+                        "WHERE s.status IN ('running', 'pending')"
+                    ).fetchall()
+                    for s in live:
+                        detail = f" [{s['status_detail']}]" if s["status_detail"] else ""
+                        url_part = f"  {s['session_url']}" if s["session_url"] else ""
+                        print(f"    {s['session_id'][:20]}  {s['status']}{detail}  {s['title'][:35]}{url_part}")
 
                 time.sleep(POLL_INTERVAL)
-                _poll_sessions(db, devin)
+                _poll_sessions(db, devin, gh=gh, cfg=cfg)
 
         except KeyboardInterrupt:
             print("\n  Interrupted — capturing current metrics.")
+        finally:
+            if _poll_bar:
+                _poll_bar.close()
 
     # -----------------------------------------------------------------------
     # Step 5: Capture PR metrics
@@ -438,6 +627,17 @@ def main() -> int:
                     db.execute(
                         "UPDATE sessions SET commits_count=? WHERE session_id=?",
                         (len(commits), sess["session_id"]),
+                    )
+                if args.verbose:
+                    ci_row = db.execute(
+                        "SELECT ci_first_pass, human_intervened FROM sessions WHERE session_id=?",
+                        (sess["session_id"],),
+                    ).fetchone()
+                    ci_str = _fmt_ci(ci_row["ci_first_pass"]) if ci_row else "-"
+                    human_str = _fmt_bool(ci_row["human_intervened"]) if ci_row else "-"
+                    print(
+                        f"  #{sess['pr_number']}  commits={len(commits)}"
+                        f"  CI={ci_str}  human_intervened={human_str}"
                     )
             except Exception as exc:
                 logger.warning("demo.commits_count_failed", extra={"pr_number": sess["pr_number"], "error": str(exc)})
