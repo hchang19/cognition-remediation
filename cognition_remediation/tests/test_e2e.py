@@ -55,7 +55,7 @@ class TestDevinClientLifecycle:
             }),
             _mock_response(200, {
                 "session_id": "sess-e2e-1",
-                "status": "completed",
+                "status": "exit",
                 "cost_usd": 1.50,
                 "session_url": "https://app.devin.ai/sessions/sess-e2e-1",
                 "pr_url": "https://github.com/org/repo/pull/42",
@@ -109,7 +109,7 @@ class TestDevinClientLifecycle:
             }),
             _mock_response(200, {
                 "session_id": "sess-fail",
-                "status": "failed",
+                "status": "error",
                 "cost_usd": 0.25,
                 "session_url": None,
                 "pr_url": None,
@@ -117,7 +117,7 @@ class TestDevinClientLifecycle:
             }),
             _mock_response(200, {
                 "session_id": "sess-retry",
-                "status": "completed",
+                "status": "exit",
                 "cost_usd": 1.00,
                 "session_url": "https://app.devin.ai/sessions/sess-retry",
                 "pr_url": "https://github.com/org/repo/pull/43",
@@ -154,7 +154,8 @@ class TestDevinClientLifecycle:
         client._session.get = MagicMock(
             return_value=_mock_response(200, {
                 "session_id": "sess-blocked",
-                "status": "blocked",
+                "status": "suspended",
+                "status_detail": "usage_limit_exceeded",
                 "cost_usd": 0.50,
                 "session_url": "https://app.devin.ai/sessions/sess-blocked",
                 "pr_url": None,
@@ -322,7 +323,7 @@ class TestCrossClientOrchestration:
         devin_get_responses = [
             _mock_response(200, {
                 "session_id": "sess-orch-1",
-                "status": "completed",
+                "status": "exit",
                 "cost_usd": 2.00,
                 "session_url": "https://app.devin.ai/sessions/sess-orch-1",
                 "pr_url": "https://github.com/org/repo/pull/99",
@@ -435,7 +436,7 @@ class TestCrossClientOrchestration:
         devin_client._session.get = MagicMock(side_effect=[
             _mock_response(200, {
                 "session_id": f"sess-{i}",
-                "status": "completed",
+                "status": "exit",
                 "cost_usd": float(i),
                 "session_url": None,
                 "pr_url": f"https://github.com/org/repo/pull/{100 + i}",

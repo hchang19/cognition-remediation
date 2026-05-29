@@ -138,3 +138,67 @@ For each session where status = 'completed' and pr_number is not null:
 ```
 
 On orchestrator restart: resumes from all non-terminal sessions in SQLite — no state lost.
+
+---
+
+## Known Failure Points
+
+These are documented gaps, not bugs. They are acceptable at demo scale but would need hardening before production use.
+
+### Duplicate Session Risk
+
+**Retry-on-timeout creates ghost sessions on Devin.**
+`devin.create_session()` is wrapped in `with_retry` (max 3 attempts). If Devin processes the request, creates the session internally, but returns a 5xx before the response arrives, the retry fires and creates a *second* session on Devin. Our DB only records the second session ID. The first session is running and billing with no record in our system.
+
+**Race condition between webhook and poller.**
+`handle_issue()` can be called from two places simultaneously: the webhook handler (FastAPI `BackgroundTasks`) and `_poll_issues()` in the poller thread. Both can pass the `_has_active_session()` check before either commits a sessions row. Result: two Devin sessions created for the same issue. There is no mutex or DB-level lock preventing this. Under normal load (webhook fires, then poller runs 60s later) the active session check prevents this — but if both fire within the same second, it can happen.
+
+---
+
+### Routing Correctness
+
+**`severity:critical` is not blocked.**
+`CLAUDE.md` specifies that `severity:critical` issues should skip the orchestrator and require human triage. The current orchestrator checks only the `complexity:*` label. An issue labelled `complexity:definite + severity:critical` gets dispatched to Devin rather than escalated.
+
+**Label format drift causes silent decline.**
+Complexity is detected with `l.startswith("complexity:")`. If the label is ever created as `complexity: definite` (with a space after the colon), the check fails and the issue defaults to `"ambiguous"`, triggering `needs-human-scoping` with no indication of why. Any label typo or format change silently reroutes everything.
+
+**Multiple complexity labels produce non-deterministic routing.**
+If an issue has both `complexity:definite` and `complexity:ambiguous` applied, `next()` picks whichever appears first when iterating the label set, which is unordered in Python. The routing outcome is non-deterministic and silently wrong.
+
+---
+
+### Data Integrity
+
+**`INSERT OR IGNORE` silently drops body updates.**
+`_upsert_issue()` uses `INSERT OR IGNORE`. If an issue was first inserted without a body (e.g. from an older code version that didn't store body), all subsequent calls with the real body are silently discarded. The reviewer prompt would see an empty body for that issue.
+
+**Partial DB state on process crash between writes.**
+`_upsert_issue()` and `INSERT INTO sessions` are separate `with db:` blocks. A crash between them leaves an `issues` row with an `issue.created` event but no session row. The next call correctly retries (no active session exists), but the duplicate `issue.created` event can skew event counts in the dashboard.
+
+---
+
+### Operational Blind Spots
+
+**No circuit breaker on repeated Devin failures.**
+If Devin's API is down, every issue on every poll cycle (60s) attempts session creation and fails after 3 retries. With 5 open issues this produces ~15 failed API calls per minute indefinitely. There is no backoff at the orchestrator level — only the per-call retry backoff. Alerts would have to be set on the `session.start_failed` event rate.
+
+**`devin_daily_limit=0` is a silent no-op with no alerting.**
+If `DEVIN_DAILY_SESSION_LIMIT` is accidentally set to `0`, the orchestrator logs `orchestrator.daily_limit_reached` for every single issue and does nothing. The system appears healthy — requests come in, the poller runs — but no sessions are ever created.
+
+---
+
+### Lifecycle Gaps
+
+**No session termination when an issue is closed.**
+If a GitHub issue is manually closed or resolved while a Devin session is running, the orchestrator does not call `devin.terminate_session()`. The session keeps running and billing until it reaches a terminal state on its own.
+
+**No handling of label removal.**
+If someone removes the `auto-remediate` label from an issue that already has a running session, the orchestrator does not notice. There is no mechanism to cancel an in-flight session when the dispatching precondition is removed.
+
+---
+
+### Configuration Assumptions
+
+**`github_repo` must be `owner/repo`, not validated.**
+`repo_url = f"https://github.com/{cfg.github_repo}"` assumes the value is formatted as `owner/repo`. A misconfigured value (full URL, trailing slash, org-only) produces a silently malformed repo URL that is passed to Devin. Devin will likely fail to clone and the session will either time out or produce an unhelpful error.

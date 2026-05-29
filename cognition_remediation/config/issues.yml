@@ -173,6 +173,137 @@ issues:
       {"complexity": "semi-definite", "source": "manual", "type": "feature", "idempotency_key": "manual-feature-csv-export-sql-lab"}
       -->
 
+  # --- DEFINITE: large scope — likely to hit session cost cap ---
+  # This issue touches many files across the codebase. In a real run with a
+  # cost cap set (DEVIN_SESSION_COST_LIMIT_USD), Devin will be terminated mid-way
+  # and the issue will receive a "devin-incomplete" label with a progress comment.
+  - title: "Rotate all hardcoded API keys and secrets to environment variables (security audit finding)"
+    complexity: definite
+    source: manual
+    severity: critical
+    type: vulnerability
+    labels: [auto-remediate, complexity:definite, source:manual, severity:critical, type:vulnerability]
+    body: |
+      ## Summary
+      A security audit found hardcoded credentials in multiple configuration files,
+      test fixtures, and example scripts. All must be moved to environment variables
+      before the next release.
+
+      ## Location
+      Audit identified at least 18 files. Key hotspots:
+      - `superset/config.py` — `SECRET_KEY`, `SQLALCHEMY_DATABASE_URI`, `REDIS_URL`
+      - `superset/examples/helpers.py` — hardcoded database URL
+      - `tests/integration_tests/conftest.py` — hardcoded admin credentials
+      - `docker/pythonpath_dev/superset_config.py` — hardcoded passwords
+      - `superset/initialization.py` — hardcoded Flask secret
+      - `superset/extensions/cache.py` — hardcoded Redis password
+      - `superset/sql_validators/presto.py` — hardcoded Presto credentials
+      - `superset/tasks/scheduler.py` — hardcoded SMTP credentials
+      - Multiple `examples/` scripts with DB connection strings
+
+      ## Suggested Remediation
+      1. Replace each hardcoded value with `os.environ.get("VAR_NAME", default)`
+      2. Add the new env var names to `.env.example`
+      3. Update Docker Compose files to pass the env vars through
+      4. Update `docs/installation/configuration.md` with the new required variables
+      5. Add a `pre-commit` hook or CI check to prevent future hardcoding (e.g. detect-secrets)
+
+      ## Acceptance Criteria
+      - [ ] No plaintext secrets remain in any tracked file
+      - [ ] CI passes with env vars injected via test fixtures
+      - [ ] `.env.example` is updated with all new vars
+      - [ ] `detect-secrets` (or equivalent) added to CI
+
+      <!-- cognition-meta
+      {"complexity": "definite", "source": "manual", "type": "vulnerability", "idempotency_key": "manual-sec-rotate-hardcoded-secrets"}
+      -->
+
+  # --- SEMI-DEFINITE: requires environment access — likely to get Devin blocked ---
+  # Devin will need database credentials, a running Superset dev instance, or
+  # access to production logs that it cannot obtain on its own. The session will
+  # enter "blocked" status and receive the "devin-blocked" label.
+  - title: "Investigate and fix intermittent OOM crash in production chart renderer"
+    complexity: semi-definite
+    source: manual
+    severity: high
+    type: bug
+    labels: [auto-remediate, complexity:semi-definite, source:manual, severity:high, type:bug]
+    body: |
+      ## Summary
+      The production chart renderer (ECharts worker) crashes with an out-of-memory error
+      several times per day on dashboards with more than 20 charts. The crash is
+      intermittent and has not been reproduced locally.
+
+      ## Source
+      Production incident report — Sentry event `SUPERSET-1A2B3C`, Datadog alert `oom-chart-renderer`
+
+      ## Location
+      Unknown — suspected in:
+      - `superset-frontend/src/visualizations/ECharts/`
+      - `superset-frontend/src/components/Chart/ChartRenderer.jsx`
+      - Memory leak in WebSocket keep-alive handler
+
+      ## Reproducer
+      Requires access to:
+      - Production Sentry for stack traces (ask oncall for access)
+      - Datadog APM for memory profile at crash time
+      - A dashboard with 25+ live charts (canary environment only)
+
+      ## Suggested Remediation
+      1. Retrieve production stack trace and memory profile from Sentry/Datadog
+      2. Identify the leak source
+      3. Add `WeakRef` or explicit cleanup where objects are held past their scope
+      4. Add memory monitoring to CI for the chart rendering path
+
+      ## Acceptance Criteria
+      - [ ] Root cause identified and documented in PR
+      - [ ] OOM no longer triggered in a 25-chart load test (canary env)
+      - [ ] Memory regression test added to CI
+
+      <!-- cognition-meta
+      {"complexity": "semi-definite", "source": "manual", "type": "bug", "idempotency_key": "manual-bug-oom-chart-renderer"}
+      -->
+
+  # --- DEFINITE: long-running migration — likely to hit session time limit ---
+  # Migrating a large Alembic schema on a 50M-row table requires careful index
+  # planning and can take 30-60 min to validate. With a time limit set
+  # (DEVIN_SESSION_TIME_LIMIT_MINUTES), the session will be terminated and the
+  # issue labelled "devin-incomplete".
+  - title: "Add database index on slices.datasource_id to fix slow dashboard load queries"
+    complexity: definite
+    source: manual
+    severity: medium
+    type: bug
+    labels: [auto-remediate, complexity:definite, source:manual, severity:medium, type:bug]
+    body: |
+      ## Summary
+      Dashboard load times regressed 3x after the `slices` table grew past 50 million
+      rows. EXPLAIN shows a full sequential scan on `slices.datasource_id`. Adding an
+      index on that column brings query time from ~4s back to ~40ms in staging.
+
+      ## Location
+      - File: `superset/migrations/versions/` (new migration file needed)
+      - Affected query: `superset/models/slice.py:Slice.get_query_context()`
+
+      ## Details
+      The migration must:
+      1. Use `CREATE INDEX CONCURRENTLY` (Postgres) so it doesn't lock the table
+      2. Add a `NULLS NOT DISTINCT` clause for rows where `datasource_id IS NULL`
+      3. Be paired with a down migration that drops the index
+      4. Be validated in staging before merging — run `EXPLAIN ANALYZE` before and after
+      5. Document estimated migration time for ops team (expected: ~45 min on prod)
+
+      ## Acceptance Criteria
+      - [ ] New Alembic migration file with correct `upgrade()` and `downgrade()`
+      - [ ] Migration uses `CREATE INDEX CONCURRENTLY` on Postgres
+      - [ ] `EXPLAIN ANALYZE` output showing index scan included in PR description
+      - [ ] Staging validation completed and documented
+      - [ ] No existing tests broken
+
+      <!-- cognition-meta
+      {"complexity": "definite", "source": "manual", "type": "bug", "idempotency_key": "manual-bug-slices-datasource-index"}
+      -->
+
   # --- AMBIGUOUS: vague performance ask ---
   - title: "Make the dashboard rendering faster"
     complexity: ambiguous
