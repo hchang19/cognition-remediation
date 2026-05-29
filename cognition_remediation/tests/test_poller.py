@@ -84,6 +84,45 @@ def test_poll_sessions_handles_devin_api_error(mem_db):
 
 
 @pytest.mark.unit
+def test_poll_sessions_transitions_to_pending_and_posts_comment(mem_db):
+    _seed_session(mem_db, session_id="s-pend", status="running", pr_number=7)
+    devin = MagicMock(spec=DevinClient)
+    devin.get_session.return_value = SessionResponse(
+        session_id="s-pend", status="pending", status_detail="waiting_for_user",
+        cost_usd=None, session_url="https://app.devin.ai/sessions/s-pend",
+        pr_url=None, output=None,
+    )
+    gh = MagicMock(spec=GitHubClient)
+
+    _poll_sessions(mem_db, devin, gh=gh)
+
+    row = mem_db.execute("SELECT status, completed_at FROM sessions WHERE session_id='s-pend'").fetchone()
+    assert row["status"] == "pending"
+    assert row["completed_at"] is None          # non-terminal: no completed_at
+    event = mem_db.execute("SELECT event_type, payload FROM events WHERE session_id='s-pend'").fetchone()
+    assert event["event_type"] == "session.pending"
+    gh.post_comment.assert_called_once()        # comment posted on PR #7
+
+
+@pytest.mark.unit
+def test_poll_sessions_pending_session_resumes_to_running(mem_db):
+    _seed_session(mem_db, session_id="s-resume", status="pending")
+    devin = MagicMock(spec=DevinClient)
+    devin.get_session.return_value = SessionResponse(
+        session_id="s-resume", status="running", status_detail="working",
+        cost_usd=None, session_url=None, pr_url=None, output=None,
+    )
+
+    _poll_sessions(mem_db, devin)
+
+    row = mem_db.execute("SELECT status FROM sessions WHERE session_id='s-resume'").fetchone()
+    assert row["status"] == "running"
+    # No event inserted for running re-transition
+    count = mem_db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.unit
 def test_poll_prs_flags_human_commit(mem_db):
     _seed_session(mem_db, session_id="s4", status="completed", pr_number=5)
     gh = MagicMock(spec=GitHubClient)

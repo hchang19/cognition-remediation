@@ -13,7 +13,7 @@ Event taxonomy (matches ``docs/stage-2-db.md``):
 
     issue.created       issue.closed        issue.reopened
     session.started     session.completed   session.failed
-    session.blocked     session.declined    session.start_failed
+    session.pending     session.blocked     session.declined    session.start_failed
     pr.opened           pr.human_commit     pr.ci_completed
 """
 
@@ -36,6 +36,7 @@ EVENT_ISSUE_REOPENED = "issue.reopened"
 EVENT_SESSION_STARTED = "session.started"
 EVENT_SESSION_COMPLETED = "session.completed"
 EVENT_SESSION_FAILED = "session.failed"
+EVENT_SESSION_PENDING = "session.pending"
 EVENT_SESSION_BLOCKED = "session.blocked"
 EVENT_SESSION_DECLINED = "session.declined"
 EVENT_SESSION_START_FAILED = "session.start_failed"
@@ -193,6 +194,23 @@ def insert_session_failed(
     insert_event(
         db,
         EVENT_SESSION_FAILED,
+        idempotency_key,
+        issue_id=issue_id,
+        session_id=session_id,
+        payload=payload,
+    )
+
+
+def insert_session_pending(
+    db: sqlite3.Connection,
+    issue_id: int,
+    session_id: str,
+    idempotency_key: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    insert_event(
+        db,
+        EVENT_SESSION_PENDING,
         idempotency_key,
         issue_id=issue_id,
         session_id=session_id,

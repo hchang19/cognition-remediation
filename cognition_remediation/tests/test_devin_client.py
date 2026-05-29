@@ -43,25 +43,30 @@ def test_create_session_sends_correct_payload():
 
 
 @pytest.mark.unit
-def test_get_session_maps_all_fields():
+def test_get_session_maps_v3_fields():
+    """v3 API: status=exit → completed, pull_requests array, acus_consumed, messages."""
     client = _make_client()
     client._session.get = MagicMock(return_value=_mock_response(200, {
         "session_id": "sess-abc",
-        "status": "completed",
-        "cost_usd": 1.23,
-        "session_url": "https://app.devin.ai/sessions/sess-abc",
-        "pr_url": "https://github.com/org/repo/pull/5",
-        "output": "Fixed the CVE.",
+        "status": "exit",
+        "status_detail": None,
+        "acus_consumed": 1.23,
+        "url": "https://app.devin.ai/sessions/sess-abc",
+        "pull_requests": [{"url": "https://github.com/org/repo/pull/5"}],
+        "messages": [
+            {"type": "user", "message": "Fix the CVE."},
+            {"type": "assistant", "message": "Fixed the CVE."},
+        ],
     }))
 
     result = client.get_session("sess-abc")
 
     assert isinstance(result, SessionResponse)
     assert result.session_id == "sess-abc"
-    assert result.status == "completed"
-    assert result.cost_usd == 1.23
+    assert result.status == "completed"          # exit → completed
+    assert result.cost_usd == 1.23              # acus_consumed
     assert result.pr_url == "https://github.com/org/repo/pull/5"
-    assert result.output == "Fixed the CVE."
+    assert result.output == "Fixed the CVE."    # last assistant message
 
 
 @pytest.mark.unit
@@ -70,15 +75,67 @@ def test_get_session_handles_null_optional_fields():
     client._session.get = MagicMock(return_value=_mock_response(200, {
         "session_id": "sess-abc",
         "status": "running",
-        "cost_usd": None,
-        "session_url": None,
-        "pr_url": None,
-        "output": None,
+        "status_detail": "working",
     }))
 
     result = client.get_session("sess-abc")
+    assert result.status == "running"
     assert result.cost_usd is None
     assert result.pr_url is None
+
+
+@pytest.mark.unit
+def test_get_session_normalizes_pending_waiting_for_user():
+    client = _make_client()
+    client._session.get = MagicMock(return_value=_mock_response(200, {
+        "session_id": "sess-abc",
+        "status": "running",
+        "status_detail": "waiting_for_user",
+    }))
+
+    result = client.get_session("sess-abc")
+    assert result.status == "pending"
+    assert result.status_detail == "waiting_for_user"
+
+
+@pytest.mark.unit
+def test_get_session_normalizes_suspended_to_blocked():
+    client = _make_client()
+    client._session.get = MagicMock(return_value=_mock_response(200, {
+        "session_id": "sess-abc",
+        "status": "suspended",
+        "status_detail": "usage_limit_exceeded",
+        "acus_consumed": 5.0,
+    }))
+
+    result = client.get_session("sess-abc")
+    assert result.status == "blocked"
+    assert result.cost_usd == 5.0
+
+
+@pytest.mark.unit
+def test_get_session_normalizes_suspended_inactivity_to_pending():
+    client = _make_client()
+    client._session.get = MagicMock(return_value=_mock_response(200, {
+        "session_id": "sess-abc",
+        "status": "suspended",
+        "status_detail": "inactivity",
+    }))
+
+    result = client.get_session("sess-abc")
+    assert result.status == "pending"
+
+
+@pytest.mark.unit
+def test_get_session_normalizes_error_to_failed():
+    client = _make_client()
+    client._session.get = MagicMock(return_value=_mock_response(200, {
+        "session_id": "sess-abc",
+        "status": "error",
+    }))
+
+    result = client.get_session("sess-abc")
+    assert result.status == "failed"
 
 
 @pytest.mark.unit

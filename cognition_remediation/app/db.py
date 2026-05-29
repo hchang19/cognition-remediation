@@ -91,6 +91,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Apply incremental column additions to existing databases."""
     for stmt in [
         "ALTER TABLE sessions ADD COLUMN pr_merged INTEGER",
+        "ALTER TABLE sessions ADD COLUMN status_detail TEXT",
     ]:
         try:
             conn.execute(stmt)
